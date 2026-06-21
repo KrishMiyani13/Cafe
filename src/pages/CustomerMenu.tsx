@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useCafe } from '../context/CafeContext';
-import type { Cafe, MenuItem } from '../context/CafeContext';
+import type { Cafe, MenuItem, Order, OrderItem } from '../context/CafeContext';
 import { Modal } from '../components/Modal';
 import { 
   Search, ShoppingBag, X, Plus, Minus, Check, CreditCard, 
@@ -161,8 +161,14 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [isVegOnly, setIsVegOnly] = useState(false);
 
-  // Active Order Tracker state
-  const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
+  // Active Order tracking states
+  const [payingOrder, setPayingOrder] = useState<Order | null>(null);
+  const [prevActiveOrdersCount, setPrevActiveOrdersCount] = useState(0);
+
+  // Calculate active table orders
+  const activeTableOrders = orders.filter(
+    o => o.cafeId === cafeId && o.tableNum === tableNum && o.status !== 'paid'
+  );
 
   // SaaS Features states
   const [selectedLang, setSelectedLang] = useState<Lang>('en');
@@ -201,22 +207,12 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
     }
   }, [cafes, cafeId]);
 
-  // Check if this table has an active order
+  // Check if all active orders have been paid to trigger reviews
   useEffect(() => {
-    if (cafeId) {
-      const activeOrder = orders.find(
-        o => o.cafeId === cafeId && o.tableNum === tableNum && o.status !== 'paid'
-      );
-      if (activeOrder) {
-        setActiveOrderId(activeOrder.id);
-      } else {
-        // If there was an active order, and it was just paid, open feedback modal!
-        if (activeOrderId) {
-          setIsFeedbackOpen(true);
-        }
-        setActiveOrderId(null);
-      }
+    if (activeTableOrders.length === 0 && prevActiveOrdersCount > 0) {
+      setIsFeedbackOpen(true);
     }
+    setPrevActiveOrdersCount(activeTableOrders.length);
   }, [orders, cafeId, tableNum]);
 
   // Intersection Observer for scroll-linked card stagger slide-up
@@ -306,6 +302,9 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
       return updated;
     });
   };
+  const isLoyaltyMember = customerPhone.length > 5;
+  const pastOrdersCount = isLoyaltyMember ? getCustomerOrderCount(customerPhone) : 0;
+  const isDiscountEligible = isLoyaltyMember && (pastOrdersCount + 1) >= 5;
 
   const getCartTotalItems = () => {
     return Object.values(cart).reduce((acc, curr) => acc + curr, 0);
@@ -318,17 +317,11 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
     }, 0);
   };
 
-  // Loyalty calculations (15% off on 5th order)
-  const isLoyaltyMember = customerPhone.length > 5;
-  const pastOrdersCount = isLoyaltyMember ? getCustomerOrderCount(customerPhone) : 0;
-  const isDiscountEligible = isLoyaltyMember && (pastOrdersCount + 1) >= 5;
-
   const rawSubtotal = getCartSubtotal();
   const loyaltyDiscount = isDiscountEligible ? rawSubtotal * 0.15 : 0;
   const cartFinalTotal = rawSubtotal - loyaltyDiscount;
 
   // AI Recommendation Engine
-  // If Pizza is in the cart, suggest Pasta or Drink. If Bowls in the cart, suggest Pizza.
   const getAIRecommendation = (): MenuItem | null => {
     const cartItemIds = Object.keys(cart);
     if (cartItemIds.length === 0) return null;
@@ -343,7 +336,6 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
       return itm?.category.toLowerCase() === 'pasta';
     });
 
-    // Find first item in menu of complementary category that is NOT already in cart
     if (hasPizza) {
       const match = cafe.menu.find(itm => itm.category.toLowerCase() === 'pasta' && !cart[itm.id]);
       if (match) return match;
@@ -353,7 +345,6 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
       if (match) return match;
     }
 
-    // Default: recommend first item in menu that is not in cart
     const fallback = cafe.menu.find(itm => !cart[itm.id]);
     return fallback || null;
   };
@@ -398,16 +389,15 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
     setCart({});
     setIsCheckoutOpen(false);
     setIsCartOpen(false);
-    setActiveOrderId(placedOrder.id);
   };
 
   // Submit payment & complete bill checkout
   const handlePayBillSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeOrderId) return;
-    updateOrderStatus(activeOrderId, 'paid');
+    if (!payingOrder) return;
+    updateOrderStatus(payingOrder.id, 'paid');
     setIsPayBillOpen(false);
-    setIsFeedbackOpen(true);
+    setPayingOrder(null);
   };
 
   // Waiter Call Trigger
@@ -429,8 +419,6 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
       setIsFeedbackOpen(false);
     }, 2000);
   };
-
-  const currentActiveOrder = orders.find(o => o.id === activeOrderId);
 
   return (
     <div className="customer-portal" style={cafeStyles}>
@@ -547,35 +535,56 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
         </div>
       )}
 
-      {/* Active Order Tracker */}
-      {activeOrderId && currentActiveOrder && (
-        <div style={{ margin: '20px', padding: '20px', background: 'var(--cafe-card)', borderRadius: 'var(--radius-md)', border: '1px solid var(--cafe-border)', display: 'flex', flexDirection: 'column', gap: '16px' }} className="animate-fade-in">
-          <div className="flex-between">
-            <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--cafe-text)' }}>{t.statusTitle}</h4>
-            <span style={{ fontSize: '0.8rem', color: 'var(--cafe-text-muted)' }}>Order ID: #{currentActiveOrder.id.split('-')[1]}</span>
-          </div>
+      {/* Active Orders Tracker List */}
+      {activeTableOrders.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', margin: '20px' }}>
+          {activeTableOrders.map((order, idx) => (
+            <div 
+              key={order.id} 
+              style={{ 
+                padding: '20px', 
+                background: 'var(--cafe-card)', 
+                borderRadius: 'var(--radius-md)', 
+                border: '1px solid var(--cafe-border)', 
+                display: 'flex', 
+                flexDirection: 'column', 
+                gap: '16px',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.02)'
+              }} 
+              className="animate-fade-in"
+            >
+              <div className="flex-between">
+                <div>
+                  <h4 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--cafe-text)', margin: 0 }}>
+                    {idx === 0 ? 'First Order' : `Repeat Order #${idx + 1}`}
+                  </h4>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--cafe-text-muted)', display: 'block', marginTop: '4px' }}>
+                    Items: {order.items.map(itm => `${itm.quantity}x ${itm.menuItem.name}`).join(', ')}
+                  </span>
+                </div>
+                <span style={{ fontSize: '0.8rem', color: 'var(--cafe-text-muted)', background: 'rgba(0,0,0,0.03)', padding: '2px 8px', borderRadius: '4px', border: '1px solid var(--cafe-border)' }}>
+                  ID: #{order.id.split('-')[1] || order.id.slice(-5)}
+                </span>
+              </div>
 
-          <StatusStepper status={currentActiveOrder.status} t={t} />
+              <StatusStepper status={order.status} t={t} />
 
-          {currentActiveOrder.status === 'paid' && (
-            <div style={{ textAlign: 'center', padding: '10px 0' }}>
-              <button className="btn-cafe-action" style={{ fontSize: '0.85rem' }} onClick={() => setActiveOrderId(null)}>
-                {t.orderAgain}
-              </button>
+              {order.status !== 'paid' && (
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: '8px', borderTop: '1px dashed var(--cafe-border)', paddingTop: '16px' }}>
+                  <button 
+                    className="btn-cafe-action" 
+                    style={{ width: '100%', padding: '12px', fontSize: '0.9rem', fontWeight: 700 }}
+                    onClick={() => {
+                      setPayingOrder(order);
+                      setIsPayBillOpen(true);
+                    }}
+                  >
+                    💳 Pay Bill & Check Out (${order.totalAmount.toFixed(2)})
+                  </button>
+                </div>
+              )}
             </div>
-          )}
-
-          {currentActiveOrder.status !== 'paid' && (
-            <div style={{ display: 'flex', justifyContent: 'center', marginTop: '8px', borderTop: '1px dashed var(--cafe-border)', paddingTop: '16px' }}>
-              <button 
-                className="btn-cafe-action" 
-                style={{ width: '100%', padding: '12px', fontSize: '0.9rem', fontWeight: 700 }}
-                onClick={() => setIsPayBillOpen(true)}
-              >
-                💳 Pay Bill & Check Out (${currentActiveOrder.totalAmount.toFixed(2)})
-              </button>
-            </div>
-          )}
+          ))}
         </div>
       )}
 
@@ -950,14 +959,14 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
       <Modal isOpen={isPayBillOpen} onClose={() => setIsPayBillOpen(false)} title="Pay Bill & Checkout">
         <form onSubmit={handlePayBillSubmit} className="payment-form">
           {/* Order Summary / Invoice */}
-          {currentActiveOrder && (
+          {payingOrder && (
             <div style={{ background: 'rgba(0,0,0,0.02)', padding: '10px 12px', border: '1px solid var(--cafe-border)', borderRadius: '8px', fontSize: '0.8rem' }}>
               <div style={{ fontWeight: 700, marginBottom: '6px', color: 'var(--cafe-text)', display: 'flex', justifyContent: 'space-between' }}>
                 <span>Order Invoice</span>
-                <span style={{ color: 'var(--cafe-text-muted)', fontWeight: 500 }}>ID: #{currentActiveOrder.id.split('-')[1]}</span>
+                <span style={{ color: 'var(--cafe-text-muted)', fontWeight: 500 }}>ID: #{payingOrder.id.split('-')[1]}</span>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '100px', overflowY: 'auto' }}>
-                {currentActiveOrder.items.map((itm, idx) => (
+                {payingOrder.items.map((itm: OrderItem, idx: number) => (
                   <div key={idx} className="flex-between">
                     <span style={{ color: 'var(--cafe-text-muted)' }}>{itm.quantity}x {itm.menuItem.name}</span>
                     <span style={{ fontWeight: 600, color: 'var(--cafe-text)' }}>${(itm.menuItem.price * itm.quantity).toFixed(2)}</span>
@@ -966,7 +975,7 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
               </div>
               <div className="flex-between" style={{ borderTop: '1px dashed var(--cafe-border)', paddingTop: '6px', marginTop: '6px', fontWeight: 700 }}>
                 <span>Amount to Pay:</span>
-                <span style={{ color: 'var(--cafe-primary)', fontSize: '0.95rem' }}>${currentActiveOrder.totalAmount.toFixed(2)}</span>
+                <span style={{ color: 'var(--cafe-primary)', fontSize: '0.95rem' }}>${payingOrder.totalAmount.toFixed(2)}</span>
               </div>
             </div>
           )}
@@ -1050,14 +1059,14 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center', padding: '8px 0', textAlign: 'center' }}>
               <div style={{ background: '#f8fafc', padding: '8px', borderRadius: '8px', border: '1px solid #e2e8f0', display: 'inline-block' }}>
                 <img 
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=upi://pay?pa=tablebite@mockupi&pn=${encodeURIComponent(cafe.name)}&am=${currentActiveOrder ? currentActiveOrder.totalAmount : cartFinalTotal}`}
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=upi://pay?pa=tablebite@mockupi&pn=${encodeURIComponent(cafe.name)}&am=${payingOrder ? payingOrder.totalAmount : cartFinalTotal}`}
                   alt="UPI Pay QR" 
                   style={{ width: '110px', height: '110px', display: 'block' }}
                 />
               </div>
               <div>
                 <p style={{ fontWeight: 600, color: 'var(--cafe-text)', fontSize: '0.8rem', margin: 0 }}>Scan using GPay, PhonePe, or Paytm</p>
-                <p style={{ fontSize: '0.75rem', color: 'var(--cafe-text-muted)', marginTop: '2px', marginBottom: 0 }}>Amount to Pay: ${currentActiveOrder ? currentActiveOrder.totalAmount.toFixed(2) : cartFinalTotal.toFixed(2)}</p>
+                <p style={{ fontSize: '0.75rem', color: 'var(--cafe-text-muted)', marginTop: '2px', marginBottom: 0 }}>Amount to Pay: ${payingOrder ? payingOrder.totalAmount.toFixed(2) : cartFinalTotal.toFixed(2)}</p>
               </div>
             </div>
           )}
