@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useCafe } from '../context/CafeContext';
-import type { Cafe, MenuItem, Order, OrderItem } from '../context/CafeContext';
+import type { Cafe, MenuItem } from '../context/CafeContext';
 import { Modal } from '../components/Modal';
 import { 
   Search, ShoppingBag, X, Plus, Minus, Check, CreditCard, 
@@ -139,7 +139,7 @@ const TRANSLATIONS = {
 };
 
 export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) => {
-  const { cafes, orders, placeOrder, callWaiter, submitFeedback, getCustomerOrderCount, updateOrderStatus } = useCafe();
+  const { cafes, orders, placeOrder, callWaiter, submitFeedback, getCustomerOrderCount, payAllTableOrders } = useCafe();
   const [cafe, setCafe] = useState<Cafe | null>(null);
 
   // Cart state
@@ -151,10 +151,7 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
   // Form states
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
-  const [selectedPayment, setSelectedPayment] = useState<'card' | 'upi'>('card');
-  const [cardNumber, setCardNumber] = useState('');
-  const [cardExpiry, setCardExpiry] = useState('');
-  const [cardCvv, setCardCvv] = useState('');
+  const [selectedPayment, setSelectedPayment] = useState<'card' | 'upi' | 'cash'>('upi');
   
   // Search and Filter states
   const [searchQuery, setSearchQuery] = useState('');
@@ -162,7 +159,6 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
   const [isVegOnly, setIsVegOnly] = useState(false);
 
   // Active Order tracking states
-  const [payingOrder, setPayingOrder] = useState<Order | null>(null);
   const [prevActiveOrdersCount, setPrevActiveOrdersCount] = useState(0);
 
   // Calculate active table orders
@@ -394,10 +390,16 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
   // Submit payment & complete bill checkout
   const handlePayBillSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!payingOrder) return;
-    updateOrderStatus(payingOrder.id, 'paid');
+    if (activeTableOrders.length === 0) return;
+
+    if (selectedPayment === 'cash' || selectedPayment === 'card') {
+      // Trigger waiter bill call to notify counter
+      callWaiter(cafe.id, tableNum, 'bill');
+    }
+
+    payAllTableOrders(cafe.id, tableNum);
+
     setIsPayBillOpen(false);
-    setPayingOrder(null);
   };
 
   // Waiter Call Trigger
@@ -538,6 +540,80 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
       {/* Active Orders Tracker List */}
       {activeTableOrders.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', margin: '20px' }}>
+          
+          {/* Consolidated Table Bill Card */}
+          <div 
+            style={{ 
+              padding: '24px', 
+              background: 'linear-gradient(135deg, var(--cafe-card) 0%, rgba(var(--cafe-primary-rgb), 0.05) 100%)', 
+              borderRadius: 'var(--radius-md)', 
+              border: '2px solid var(--cafe-primary)', 
+              display: 'flex', 
+              flexDirection: 'column', 
+              gap: '16px',
+              boxShadow: '0 8px 32px rgba(var(--cafe-primary-rgb), 0.08)',
+              position: 'relative',
+              overflow: 'hidden'
+            }}
+            className="glass-card animate-fade-in"
+          >
+            {/* Corner Decorative Accent */}
+            <div style={{ position: 'absolute', top: 0, right: 0, width: '100px', height: '100px', background: 'radial-gradient(circle, rgba(var(--cafe-primary-rgb), 0.1) 0%, transparent 70%)', pointerEvents: 'none' }} />
+            
+            <div className="flex-between">
+              <div>
+                <span style={{ fontSize: '0.75rem', color: 'var(--cafe-primary)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Table Checkout</span>
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 900, color: 'var(--cafe-text)', margin: '4px 0 0 0' }}>🧾 Consolidated Bill</h3>
+              </div>
+              <span style={{ fontSize: '0.75rem', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)', padding: '4px 10px', borderRadius: '20px', fontWeight: 700 }}>
+                Unpaid
+              </span>
+            </div>
+
+            <div style={{ fontSize: '0.85rem', color: 'var(--cafe-text-muted)', lineHeight: 1.4 }}>
+              Combined summary of your first order and any repeat orders. You only need to pay once.
+            </div>
+
+            {/* Consolidated Invoice List */}
+            <div style={{ background: 'rgba(0, 0, 0, 0.02)', padding: '12px 16px', borderRadius: '8px', border: '1px dashed var(--cafe-border)' }}>
+              {Object.values(
+                activeTableOrders.reduce((acc, order) => {
+                  order.items.forEach(itm => {
+                    const id = itm.menuItem.id;
+                    if (!acc[id]) {
+                      acc[id] = { name: itm.menuItem.name, quantity: 0, price: itm.menuItem.price };
+                    }
+                    acc[id].quantity += itm.quantity;
+                  });
+                  return acc;
+                }, {} as { [id: string]: { name: string; quantity: number; price: number } })
+              ).map((item, idx) => (
+                <div key={idx} className="flex-between" style={{ fontSize: '0.85rem', padding: '4px 0' }}>
+                  <span style={{ color: 'var(--cafe-text-muted)', fontWeight: 500 }}>{item.quantity}x {item.name}</span>
+                  <span style={{ fontWeight: 700, color: 'var(--cafe-text)' }}>${(item.price * item.quantity).toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex-between" style={{ marginTop: '4px' }}>
+              <span style={{ fontWeight: 700, color: 'var(--cafe-text)', fontSize: '0.95rem' }}>Total Unpaid Amount:</span>
+              <span style={{ fontSize: '1.5rem', fontWeight: 900, color: 'var(--cafe-primary)' }}>
+                ${activeTableOrders.reduce((acc, o) => acc + o.totalAmount, 0).toFixed(2)}
+              </span>
+            </div>
+
+            <button 
+              className="btn-cafe-action pulse-glow" 
+              style={{ width: '100%', padding: '16px', fontSize: '1.05rem', fontWeight: 800, borderRadius: '30px', boxShadow: '0 4px 15px rgba(var(--cafe-primary-rgb), 0.2)' }}
+              onClick={() => {
+                setIsPayBillOpen(true);
+              }}
+            >
+              💳 Pay Unified Bill & Check Out (${activeTableOrders.reduce((acc, o) => acc + o.totalAmount, 0).toFixed(2)})
+            </button>
+          </div>
+
+          {/* Individual Active Orders Status Steppers */}
           {activeTableOrders.map((order, idx) => (
             <div 
               key={order.id} 
@@ -568,21 +644,6 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
               </div>
 
               <StatusStepper status={order.status} t={t} />
-
-              {order.status !== 'paid' && (
-                <div style={{ display: 'flex', justifyContent: 'center', marginTop: '8px', borderTop: '1px dashed var(--cafe-border)', paddingTop: '16px' }}>
-                  <button 
-                    className="btn-cafe-action" 
-                    style={{ width: '100%', padding: '12px', fontSize: '0.9rem', fontWeight: 700 }}
-                    onClick={() => {
-                      setPayingOrder(order);
-                      setIsPayBillOpen(true);
-                    }}
-                  >
-                    💳 Pay Bill & Check Out (${order.totalAmount.toFixed(2)})
-                  </button>
-                </div>
-              )}
             </div>
           ))}
         </div>
@@ -959,124 +1020,170 @@ export const CustomerMenu: React.FC<CustomerMenuProps> = ({ cafeId, tableNum }) 
       <Modal isOpen={isPayBillOpen} onClose={() => setIsPayBillOpen(false)} title="Pay Bill & Checkout">
         <form onSubmit={handlePayBillSubmit} className="payment-form">
           {/* Order Summary / Invoice */}
-          {payingOrder && (
-            <div style={{ background: 'rgba(0,0,0,0.02)', padding: '10px 12px', border: '1px solid var(--cafe-border)', borderRadius: '8px', fontSize: '0.8rem' }}>
+          {activeTableOrders.length > 0 && (
+            <div style={{ background: 'rgba(0,0,0,0.02)', padding: '10px 12px', border: '1px solid var(--cafe-border)', borderRadius: '8px', fontSize: '0.8rem', marginBottom: '16px' }}>
               <div style={{ fontWeight: 700, marginBottom: '6px', color: 'var(--cafe-text)', display: 'flex', justifyContent: 'space-between' }}>
-                <span>Order Invoice</span>
-                <span style={{ color: 'var(--cafe-text-muted)', fontWeight: 500 }}>ID: #{payingOrder.id.split('-')[1]}</span>
+                <span>Consolidated Invoice</span>
+                <span style={{ color: 'var(--cafe-text-muted)', fontWeight: 500 }}>Table {tableNum}</span>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '100px', overflowY: 'auto' }}>
-                {payingOrder.items.map((itm: OrderItem, idx: number) => (
+                {Object.values(
+                  activeTableOrders.reduce((acc, order) => {
+                    order.items.forEach(itm => {
+                      const id = itm.menuItem.id;
+                      if (!acc[id]) {
+                        acc[id] = { name: itm.menuItem.name, quantity: 0, price: itm.menuItem.price };
+                      }
+                      acc[id].quantity += itm.quantity;
+                    });
+                    return acc;
+                  }, {} as { [id: string]: { name: string; quantity: number; price: number } })
+                ).map((item, idx) => (
                   <div key={idx} className="flex-between">
-                    <span style={{ color: 'var(--cafe-text-muted)' }}>{itm.quantity}x {itm.menuItem.name}</span>
-                    <span style={{ fontWeight: 600, color: 'var(--cafe-text)' }}>${(itm.menuItem.price * itm.quantity).toFixed(2)}</span>
+                    <span style={{ color: 'var(--cafe-text-muted)' }}>{item.quantity}x {item.name}</span>
+                    <span style={{ fontWeight: 600, color: 'var(--cafe-text)' }}>${(item.price * item.quantity).toFixed(2)}</span>
                   </div>
                 ))}
               </div>
               <div className="flex-between" style={{ borderTop: '1px dashed var(--cafe-border)', paddingTop: '6px', marginTop: '6px', fontWeight: 700 }}>
                 <span>Amount to Pay:</span>
-                <span style={{ color: 'var(--cafe-primary)', fontSize: '0.95rem' }}>${payingOrder.totalAmount.toFixed(2)}</span>
+                <span style={{ color: 'var(--cafe-primary)', fontSize: '0.95rem' }}>
+                  ${activeTableOrders.reduce((acc, o) => acc + o.totalAmount, 0).toFixed(2)}
+                </span>
               </div>
             </div>
           )}
 
-          <h4 style={{ fontSize: '0.9rem', borderBottom: '1px solid var(--cafe-border)', paddingBottom: '6px', color: 'var(--cafe-text)', margin: 0 }}>{t.paymentMethod}</h4>
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <button 
-              type="button"
-              className={`btn btn-sm`}
-              onClick={() => setSelectedPayment('card')}
-              style={{ 
-                flex: 1, backgroundColor: selectedPayment === 'card' ? 'var(--cafe-primary)' : 'transparent', 
-                color: selectedPayment === 'card' ? '#fff' : 'var(--cafe-text)', borderColor: 'var(--cafe-border)',
-                border: '1px solid var(--cafe-border)', padding: '10px'
-              }}
-            >
-              <CreditCard size={16} /> {t.card}
-            </button>
-            
-            <button 
-              type="button"
-              className={`btn btn-sm`}
+          <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--cafe-text)', margin: '0 0 10px 0' }}>{t.paymentMethod}</h4>
+          
+          {/* Three-Way Payment Selector */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+            {/* UPI Option */}
+            <div 
               onClick={() => setSelectedPayment('upi')}
-              style={{ 
-                flex: 1, backgroundColor: selectedPayment === 'upi' ? 'var(--cafe-primary)' : 'transparent', 
-                color: selectedPayment === 'upi' ? '#fff' : 'var(--cafe-text)', borderColor: 'var(--cafe-border)',
-                border: '1px solid var(--cafe-border)', padding: '10px'
+              style={{
+                border: selectedPayment === 'upi' ? '2px solid var(--cafe-primary)' : '1px solid var(--cafe-border)',
+                borderRadius: '10px',
+                padding: '12px 8px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                background: selectedPayment === 'upi' ? 'rgba(var(--cafe-primary-rgb), 0.04)' : 'var(--cafe-card)',
+                transition: 'all 0.2s ease',
+                position: 'relative'
               }}
             >
-              <Smartphone size={16} /> {t.upi}
-            </button>
+              <Smartphone size={20} style={{ color: selectedPayment === 'upi' ? 'var(--cafe-primary)' : 'var(--cafe-text-muted)', marginBottom: '6px' }} />
+              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--cafe-text)' }}>{t.upi}</div>
+              <div style={{
+                position: 'absolute', top: '6px', right: '6px',
+                width: '14px', height: '14px', borderRadius: '50%',
+                border: selectedPayment === 'upi' ? '4px solid var(--cafe-primary)' : '1.5px solid var(--cafe-border)',
+                background: selectedPayment === 'upi' ? '#fff' : 'transparent'
+              }} />
+            </div>
+
+            {/* Card Option */}
+            <div 
+              onClick={() => setSelectedPayment('card')}
+              style={{
+                border: selectedPayment === 'card' ? '2px solid var(--cafe-primary)' : '1px solid var(--cafe-border)',
+                borderRadius: '10px',
+                padding: '12px 8px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                background: selectedPayment === 'card' ? 'rgba(var(--cafe-primary-rgb), 0.04)' : 'var(--cafe-card)',
+                transition: 'all 0.2s ease',
+                position: 'relative'
+              }}
+            >
+              <CreditCard size={20} style={{ color: selectedPayment === 'card' ? 'var(--cafe-primary)' : 'var(--cafe-text-muted)', marginBottom: '6px' }} />
+              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--cafe-text)' }}>{t.card}</div>
+              <div style={{
+                position: 'absolute', top: '6px', right: '6px',
+                width: '14px', height: '14px', borderRadius: '50%',
+                border: selectedPayment === 'card' ? '4px solid var(--cafe-primary)' : '1.5px solid var(--cafe-border)',
+                background: selectedPayment === 'card' ? '#fff' : 'transparent'
+              }} />
+            </div>
+
+            {/* Cash Option */}
+            <div 
+              onClick={() => setSelectedPayment('cash')}
+              style={{
+                border: selectedPayment === 'cash' ? '2px solid var(--cafe-primary)' : '1px solid var(--cafe-border)',
+                borderRadius: '10px',
+                padding: '12px 8px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                background: selectedPayment === 'cash' ? 'rgba(var(--cafe-primary-rgb), 0.04)' : 'var(--cafe-card)',
+                transition: 'all 0.2s ease',
+                position: 'relative'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '20px', marginBottom: '6px' }}>
+                <span style={{ fontSize: '1.1rem', fontWeight: 700, color: selectedPayment === 'cash' ? 'var(--cafe-primary)' : 'var(--cafe-text-muted)', lineHeight: 1 }}>💵</span>
+              </div>
+              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--cafe-text)' }}>Cash</div>
+              <div style={{
+                position: 'absolute', top: '6px', right: '6px',
+                width: '14px', height: '14px', borderRadius: '50%',
+                border: selectedPayment === 'cash' ? '4px solid var(--cafe-primary)' : '1.5px solid var(--cafe-border)',
+                background: selectedPayment === 'cash' ? '#fff' : 'transparent'
+              }} />
+            </div>
           </div>
 
-          {selectedPayment === 'card' ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                <label style={{ fontSize: '0.75rem', color: 'var(--cafe-text-muted)' }}>Card Number</label>
-                <input 
-                  type="text" 
-                  maxLength={19}
-                  className="glass-input" 
-                  placeholder="4000 1234 5678 9010"
-                  value={cardNumber}
-                  onChange={(e) => setCardNumber(e.target.value)}
-                  style={{ borderColor: 'var(--cafe-border)', color: 'var(--cafe-text)', padding: '8px 12px', fontSize: '0.85rem' }}
-                  required
-                />
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <label style={{ fontSize: '0.75rem', color: 'var(--cafe-text-muted)' }}>Expiry Date</label>
-                  <input 
-                    type="text" 
-                    maxLength={5}
-                    className="glass-input" 
-                    placeholder="MM/YY"
-                    value={cardExpiry}
-                    onChange={(e) => setCardExpiry(e.target.value)}
-                    style={{ borderColor: 'var(--cafe-border)', color: 'var(--cafe-text)', padding: '8px 12px', fontSize: '0.85rem' }}
-                    required
-                  />
-                </div>
-                
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <label style={{ fontSize: '0.75rem', color: 'var(--cafe-text-muted)' }}>CVV</label>
-                  <input 
-                    type="password" 
-                    maxLength={3}
-                    className="glass-input" 
-                    placeholder="•••"
-                    value={cardCvv}
-                    onChange={(e) => setCardCvv(e.target.value)}
-                    style={{ borderColor: 'var(--cafe-border)', color: 'var(--cafe-text)', padding: '8px 12px', fontSize: '0.85rem' }}
-                    required
-                  />
-                </div>
-              </div>
-            </div>
-          ) : (
+          {/* Payment Method Screens */}
+          {selectedPayment === 'upi' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center', padding: '8px 0', textAlign: 'center' }}>
               <div style={{ background: '#f8fafc', padding: '8px', borderRadius: '8px', border: '1px solid #e2e8f0', display: 'inline-block' }}>
                 <img 
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=upi://pay?pa=tablebite@mockupi&pn=${encodeURIComponent(cafe.name)}&am=${payingOrder ? payingOrder.totalAmount : cartFinalTotal}`}
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=upi://pay?pa=tablebite@mockupi&pn=${encodeURIComponent(cafe.name)}&am=${activeTableOrders.reduce((acc, o) => acc + o.totalAmount, 0)}`}
                   alt="UPI Pay QR" 
                   style={{ width: '110px', height: '110px', display: 'block' }}
                 />
               </div>
               <div>
                 <p style={{ fontWeight: 600, color: 'var(--cafe-text)', fontSize: '0.8rem', margin: 0 }}>Scan using GPay, PhonePe, or Paytm</p>
-                <p style={{ fontSize: '0.75rem', color: 'var(--cafe-text-muted)', marginTop: '2px', marginBottom: 0 }}>Amount to Pay: ${payingOrder ? payingOrder.totalAmount.toFixed(2) : cartFinalTotal.toFixed(2)}</p>
+                <p style={{ fontSize: '0.75rem', color: 'var(--cafe-text-muted)', marginTop: '2px', marginBottom: 0 }}>
+                  Amount to Pay: ${activeTableOrders.reduce((acc, o) => acc + o.totalAmount, 0).toFixed(2)}
+                </p>
               </div>
+            </div>
+          )}
+
+          {selectedPayment === 'card' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center', padding: '12px 16px', textAlign: 'center', background: 'rgba(0,0,0,0.02)', border: '1px solid var(--cafe-border)', borderRadius: '10px' }}>
+              <div style={{ fontSize: '2rem', marginBottom: '6px' }}>💳</div>
+              <p style={{ fontWeight: 700, color: 'var(--cafe-text)', fontSize: '0.85rem', margin: 0 }}>Pay with Credit/Debit Card</p>
+              <p style={{ fontSize: '0.75rem', color: 'var(--cafe-text-muted)', margin: '4px 0 0 0', lineHeight: 1.3 }}>
+                Our waiter will bring the card machine (POS terminal) directly to your table, or you can pay with card at the main cash counter.
+              </p>
+              <p style={{ fontSize: '0.75rem', color: 'var(--cafe-text-muted)', margin: '2px 0 0 0' }}>
+                Amount to Pay: <strong>${activeTableOrders.reduce((acc, o) => acc + o.totalAmount, 0).toFixed(2)}</strong>
+              </p>
+            </div>
+          )}
+
+          {selectedPayment === 'cash' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center', padding: '12px 16px', textAlign: 'center', background: 'rgba(0,0,0,0.02)', border: '1px solid var(--cafe-border)', borderRadius: '10px' }}>
+              <div style={{ fontSize: '2rem', marginBottom: '6px' }}>💵</div>
+              <p style={{ fontWeight: 700, color: 'var(--cafe-text)', fontSize: '0.85rem', margin: 0 }}>Pay with Cash</p>
+              <p style={{ fontSize: '0.75rem', color: 'var(--cafe-text-muted)', margin: '4px 0 0 0', lineHeight: 1.3 }}>
+                Please pay cash directly to our service waiter or visit the reception/cash counter to settle your bill.
+              </p>
+              <p style={{ fontSize: '0.75rem', color: 'var(--cafe-text-muted)', margin: '2px 0 0 0' }}>
+                Amount to Pay: <strong>${activeTableOrders.reduce((acc, o) => acc + o.totalAmount, 0).toFixed(2)}</strong>
+              </p>
             </div>
           )}
 
           <button 
             type="submit" 
             className="btn-cafe-action" 
-            style={{ width: '100%', padding: '14px', borderRadius: '8px', fontWeight: 700, marginTop: '8px' }}
+            style={{ width: '100%', padding: '14px', borderRadius: '8px', fontWeight: 700, marginTop: '12px' }}
           >
-            Authorize Payment & Complete Checkout
+            {selectedPayment === 'upi' ? 'Complete Checkout' : 'Complete & Notify Staff'}
           </button>
         </form>
       </Modal>

@@ -91,6 +91,7 @@ interface CafeContextType {
     customerPhone: string
   ) => Order;
   updateOrderStatus: (orderId: string, status: Order['status']) => void;
+  payAllTableOrders: (cafeId: string, tableNum: number) => void;
   callWaiter: (cafeId: string, tableNum: number, type: WaiterCall['type']) => WaiterCall;
   resolveWaiterCall: (callId: string) => void;
   submitFeedback: (cafeId: string, rating: number, comment: string, customerName: string) => Feedback;
@@ -728,6 +729,40 @@ export const CafeProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const payAllTableOrders = (cafeId: string, tableNum: number) => {
+    const tableOrders = orders.filter(
+      (o) => o.cafeId === cafeId && o.tableNum === tableNum && o.status !== 'paid'
+    );
+    if (tableOrders.length === 0) return;
+
+    const updatedOrders = orders.map((o) =>
+      o.cafeId === cafeId && o.tableNum === tableNum && o.status !== 'paid'
+        ? { ...o, status: 'paid' as const }
+        : o
+    );
+    saveOrders(updatedOrders);
+
+    // Sync to Cloud
+    if (isCloudSyncActive && supabase) {
+      const client = supabase;
+      Promise.all(
+        tableOrders.map((o) =>
+          client
+            .from('orders')
+            .update({ status: 'paid' })
+            .eq('id', o.id)
+        )
+      ).then((results) => {
+        results.forEach(({ error }, idx) => {
+          if (error) {
+            console.error(`Cloud Sync: Error updating order status for ${tableOrders[idx].id}:`, error);
+          }
+        });
+      });
+    }
+  };
+
+
   const callWaiter = (cafeId: string, tableNum: number, type: WaiterCall['type']) => {
     const newCall: WaiterCall = {
       id: `call-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -829,6 +864,7 @@ export const CafeProvider: React.FC<{ children: React.ReactNode }> = ({ children
         deleteTable,
         placeOrder,
         updateOrderStatus,
+        payAllTableOrders,
         callWaiter,
         resolveWaiterCall,
         submitFeedback,
